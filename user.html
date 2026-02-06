@@ -151,10 +151,13 @@
 
       contractAddr = assertContractAddress(ethers);
       provider = new ethers.providers.Web3Provider(window.ethereum);
+
       const accs = await provider.send("eth_accounts", []);
       if(!accs || !accs.length){
         await provider.send("eth_requestAccounts", []);
       }
+
+      // กันใส่ address คนแทน contract
       await assertIsContract(provider, contractAddr);
 
       signer = provider.getSigner();
@@ -183,7 +186,9 @@
   }
 
   async function loadAll(){
-    if(!contract){ await connect(); if(!contract) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false); }
+    if(!provider || !signer){ await connect(); }
+    if(!provider || !signer) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false);
+
     await Promise.all([refreshBalance(), loadTotalsAndTrail()]);
   }
 
@@ -192,13 +197,21 @@
     $('bal').textContent = ethers.utils.formatEther(balWei);
   }
 
+  // ✅ FIX: ไม่เรียก contract.donate() (เพราะบาง address ไม่มีฟังก์ชันนี้)
+  // ส่ง ETH ตรงเข้า contract แทน (ถ้าสัญญารับ ETH ได้ จะทำงานแน่นอนกว่า)
   async function donate(){
     try{
-      if(!contract) await connect();
+      if(!provider || !signer){ await connect(); }
       const eth = $('eth').value.trim();
       if(!eth) return msg("ใส่จำนวน Sepolia ETH ก่อน", false);
 
-      const tx = await contract.donate({ value: ethers.utils.parseEther(eth) });
+      const value = ethers.utils.parseEther(eth);
+
+      const tx = await signer.sendTransaction({
+        to: contractAddr,
+        value
+      });
+
       msg("ส่งธุรกรรมแล้ว รอยืนยัน… ⛓️", true);
       await tx.wait();
 
@@ -210,39 +223,68 @@
     }
   }
 
+  // ✅ FIX: ไม่ใช้ contract.filters.* (เพราะถ้า ABI ไม่ตรงจะพัง)
+  // ใช้ getLogs + topics แล้ว decode เอง
   async function loadTotalsAndTrail(){
     try{
       const fromBlock = 0;
-
-      const [donated, requested, approved, executed] = await Promise.all([
-        contract.queryFilter(contract.filters.Donated(), fromBlock, "latest"),
-        contract.queryFilter(contract.filters.WithdrawRequested(), fromBlock, "latest"),
-        contract.queryFilter(contract.filters.WithdrawApproved(), fromBlock, "latest"),
-        contract.queryFilter(contract.filters.WithdrawExecuted(), fromBlock, "latest"),
+      const iface = new ethers.utils.Interface([
+        "event Donated(address indexed from, uint256 amount)",
+        "event WithdrawRequested(uint256 indexed index, address indexed requester, uint256 amount, string purpose)",
+        "event WithdrawApproved(uint256 indexed index, address indexed approver, uint256 approvals)",
+        "event WithdrawExecuted(uint256 indexed index, address indexed to, uint256 amount, string purpose)"
       ]);
 
-      let totalDonatedWei = ethers.BigNumber.from(0);
-      for(const ev of donated){ totalDonatedWei = totalDonatedWei.add(ev.args.amount); }
+      const topics = {
+        Donated: ethers.utils.id("Donated(address,uint256)"),
+        WithdrawRequested: ethers.utils.id("WithdrawRequested(uint256,address,uint256,string)"),
+        WithdrawApproved: ethers.utils.id("WithdrawApproved(uint256,address,uint256)"),
+        WithdrawExecuted: ethers.utils.id("WithdrawExecuted(uint256,address,uint256,string)")
+      };
 
+      async function get(type){
+        return provider.getLogs({
+          address: contractAddr,
+          fromBlock,
+          toBlock: "latest",
+          topics: [topics[type]]
+        });
+      }
+
+      const [logsD, logsR, logsA, logsE] = await Promise.all([
+        get("Donated"), get("WithdrawRequested"), get("WithdrawApproved"), get("WithdrawExecuted")
+      ]);
+
+      const all = [];
+      for(const lg of logsD) all.push({type:"Donated", log:lg});
+      for(const lg of logsR) all.push({type:"WithdrawRequested", log:lg});
+      for(const lg of logsA) all.push({type:"WithdrawApproved", log:lg});
+      for(const lg of logsE) all.push({type:"WithdrawExecuted", log:lg});
+
+      all.sort((a,b)=>{
+        if(a.log.blockNumber !== b.log.blockNumber) return a.log.blockNumber - b.log.blockNumber;
+        return a.log.logIndex - b.log.logIndex;
+      });
+
+      // totals
+      let totalDonatedWei = ethers.BigNumber.from(0);
       let totalWithdrawnWei = ethers.BigNumber.from(0);
-      for(const ev of executed){ totalWithdrawnWei = totalWithdrawnWei.add(ev.args.amount); }
+
+      for(const item of all){
+        const parsed = iface.parseLog(item.log);
+        if(item.type === "Donated"){
+          totalDonatedWei = totalDonatedWei.add(parsed.args.amount);
+        }
+        if(item.type === "WithdrawExecuted"){
+          totalWithdrawnWei = totalWithdrawnWei.add(parsed.args.amount);
+        }
+      }
 
       $('totalDonated').textContent = ethers.utils.formatEther(totalDonatedWei);
       $('totalWithdrawn').textContent = ethers.utils.formatEther(totalWithdrawnWei);
 
-      const all = [];
-      for(const ev of donated)  all.push({ type:"Donated", ev });
-      for(const ev of requested)all.push({ type:"WithdrawRequested", ev });
-      for(const ev of approved) all.push({ type:"WithdrawApproved", ev });
-      for(const ev of executed) all.push({ type:"WithdrawExecuted", ev });
-
-      all.sort((a,b)=>{
-        if(a.ev.blockNumber !== b.ev.blockNumber) return a.ev.blockNumber - b.ev.blockNumber;
-        if(a.ev.transactionIndex !== b.ev.transactionIndex) return a.ev.transactionIndex - b.ev.transactionIndex;
-        return (a.ev.logIndex ?? 0) - (b.ev.logIndex ?? 0);
-      });
-
-      const blockNums = [...new Set(all.map(x=>x.ev.blockNumber))];
+      // timestamp map
+      const blockNums = [...new Set(all.map(x=>x.log.blockNumber))];
       const blockMap = new Map();
       for(const bn of blockNums){
         const blk = await provider.getBlock(bn);
@@ -254,9 +296,22 @@
 
       const show = all.slice().reverse().slice(0, 80);
       for(const item of show){
-        const ts = blockMap.get(item.ev.blockNumber);
+        const ts = blockMap.get(item.log.blockNumber);
         const timeStr = ts ? new Date(ts*1000).toLocaleString() : "-";
-        const detail = buildTrailDetail(item.type, item.ev);
+
+        let detail = "-";
+        try{
+          const p = iface.parseLog(item.log);
+          if(item.type === "Donated"){
+            detail = `from ${short(p.args.from)} • amount ${ethers.utils.formatEther(p.args.amount)} ETH`;
+          } else if(item.type === "WithdrawRequested"){
+            detail = `#${p.args.index.toString()} requester ${short(p.args.requester)} • amount ${ethers.utils.formatEther(p.args.amount)} ETH • "${escapeHtml(p.args.purpose)}"`;
+          } else if(item.type === "WithdrawApproved"){
+            detail = `#${p.args.index.toString()} by ${short(p.args.approver)} • approvals=${p.args.approvals.toString()}`;
+          } else if(item.type === "WithdrawExecuted"){
+            detail = `#${p.args.index.toString()} to ${short(p.args.to)} • amount ${ethers.utils.formatEther(p.args.amount)} ETH • "${escapeHtml(p.args.purpose)}"`;
+          }
+        }catch{}
 
         const tr = document.createElement("tr");
         tr.innerHTML = `
@@ -266,42 +321,10 @@
         `;
         tbody.appendChild(tr);
       }
+
     }catch(e){
       const tbody = $('trailRows');
       if(tbody) tbody.innerHTML = `<tr><td colspan="3" class="muted">โหลด Trail ไม่สำเร็จ: ${escapeHtml(e?.message || "unknown")}</td></tr>`;
-    }
-  }
-
-  function buildTrailDetail(type, ev){
-    try{
-      if(type === "Donated"){
-        const from = ev.args.from;
-        const amt = ethers.utils.formatEther(ev.args.amount);
-        return `from ${short(from)} • amount ${amt} ETH`;
-      }
-      if(type === "WithdrawRequested"){
-        const idx = ev.args.index?.toString?.() ?? "-";
-        const requester = ev.args.requester;
-        const amt = ethers.utils.formatEther(ev.args.amount);
-        const purpose = ev.args.purpose || "";
-        return `#${idx} requester ${short(requester)} • amount ${amt} ETH • "${escapeHtml(purpose)}"`;
-      }
-      if(type === "WithdrawApproved"){
-        const idx = ev.args.index?.toString?.() ?? "-";
-        const approver = ev.args.approver;
-        const approvals = ev.args.approvals?.toString?.() ?? "-";
-        return `#${idx} by ${short(approver)} • approvals=${approvals}`;
-      }
-      if(type === "WithdrawExecuted"){
-        const idx = ev.args.index?.toString?.() ?? "-";
-        const to = ev.args.to;
-        const amt = ethers.utils.formatEther(ev.args.amount);
-        const purpose = ev.args.purpose || "";
-        return `#${idx} to ${short(to)} • amount ${amt} ETH • "${escapeHtml(purpose)}"`;
-      }
-      return "-";
-    } catch {
-      return "-";
     }
   }
 
