@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Approver — Console</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="./config.js"></script>
+
+  <style>
+    :root{
+      --bg:#070707; --bg2:#0c0c0c;
+      --card: rgba(255,255,255,.04);
+      --stroke: rgba(212,175,55,.22);
+      --stroke2: rgba(255,255,255,.10);
+      --gold:#d4af37; --text:#f6f1df;
+      --muted: rgba(246,241,223,.72);
+      --shadow: 0 10px 40px rgba(0,0,0,.45);
+      --radius: 18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: ui-monospace, Menlo, Consolas, system-ui, "Noto Sans Thai", sans-serif;
+      background:
+        radial-gradient(900px 600px at 15% 10%, rgba(212,175,55,.12), transparent 55%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      color:var(--text);
+    }
+    .wrap{max-width:1180px;margin:0 auto;padding:24px}
+    .top{
+      display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center
+    }
+    .title h2{margin:0;font-size:20px}
+    .title .sub{margin-top:6px;color:var(--muted)}
+    .badge{
+      padding:8px 12px;border-radius:999px;
+      border:1px solid var(--stroke2);
+      background: rgba(0,0,0,.35);
+      color: var(--muted);
+      display:inline-flex;gap:8px;align-items:center
+    }
+    .dot{width:8px;height:8px;border-radius:999px;background:var(--gold);box-shadow:0 0 18px rgba(212,175,55,.35)}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .btn{
+      padding:10px 12px;border-radius:14px;
+      border:1px solid rgba(212,175,55,.55);
+      background: linear-gradient(180deg, rgba(212,175,55,.22), rgba(212,175,55,.12));
+      color: var(--text);
+      cursor:pointer;font-weight:900;
+      transition:.15s transform ease;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn.secondary{
+      border:1px solid var(--stroke2);
+      background: rgba(255,255,255,.06);
+      font-weight:800;
+    }
+    .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+    .card{
+      margin-top:14px;
+      border:1px solid var(--stroke);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      padding:16px;
+    }
+    .muted{color:var(--muted)}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th,td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left}
+    th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:rgba(246,241,223,.55)}
+    tr:hover td{background: rgba(212,175,55,.06)}
+    .pill{
+      display:inline-block;padding:6px 10px;border-radius:999px;
+      border:1px solid rgba(212,175,55,.25);
+      background: rgba(0,0,0,.25);
+      color: var(--muted);
+      font-size:12px;
+    }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="title">
+      <h2>🛡️ Approver Console</h2>
+      <div class="sub">Role: <b id="role"></b> | Wallet: <b id="wallet"></b></div>
+    </div>
+
+    <div class="actions">
+      <div class="badge" id="net"><span class="dot"></span>Network: -</div>
+      <div class="badge" id="addr"><span class="dot"></span>Wallet: -</div>
+      <button class="btn secondary" onclick="logout()">Logout</button>
+      <button class="btn" onclick="load()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="muted">Contract Balance: <b id="bal">-</b> <span class="pill">Sepolia ETH</span></div>
+    <div id="msg" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+      <h3 style="margin:0">📋 Withdraw Requests</h3>
+      <span class="pill">Approve เมื่อยังไม่เคยกด + ยังไม่ Withdrawn</span>
+    </div>
+
+    <div style="overflow:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Requester</th><th>Amount</th><th>Purpose</th><th>Approvals</th><th>Status</th><th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  guard("Approver");
+  const $ = (id)=>document.getElementById(id);
+
+  let provider, signer, contract, myAddr, contractAddr;
+  let REQUIRED = 0;
+
+  $('role').textContent = localStorage.getItem("role");
+  $('wallet').textContent = short(localStorage.getItem("wallet"));
+
+  function logout(){ localStorage.clear(); location.href="./index.html"; }
+  function msg(t, ok=true){ setMsg($('msg'), t, ok); }
+
+  async function connect(){
+    try{
+      if(!window.ethereum) return msg("ต้องมี MetaMask ก่อนนะ", false);
+
+      contractAddr = assertContractAddress(ethers);
+      provider = new ethers.providers.Web3Provider(window.ethereum);
+      const accs = await provider.send("eth_accounts", []);
+      if(!accs || !accs.length){
+        await provider.send("eth_requestAccounts", []);
+      }
+
+      await assertIsContract(provider, contractAddr);
+
+      signer = provider.getSigner();
+      contract = new ethers.Contract(contractAddr, ABI, signer);
+
+      REQUIRED = (await contract.REQUIRED_APPROVALS()).toNumber();
+
+      myAddr = await signer.getAddress();
+      const net = await provider.getNetwork();
+      if(net.chainId !== 11155111){
+        throw new Error("กรุณาเปลี่ยน Network เป็น Sepolia Testnet (chainId: 11155111)");
+      }
+
+      const role = detectRole(myAddr);
+      localStorage.setItem("logged_in","1");
+      localStorage.setItem("wallet", myAddr);
+      localStorage.setItem("role", role);
+      if(role !== "Approver") return location.href="./index.html";
+
+      $('addr').textContent = "Wallet: " + short(myAddr);
+      $('net').textContent  = "Network: Sepolia ("+net.chainId+")";
+
+      await refreshBalance();
+      msg("เชื่อมต่อแล้ว ✅", true);
+      await load();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function refreshBalance(){
+    const balWei = await provider.getBalance(contractAddr);
+    $('bal').textContent = ethers.utils.formatEther(balWei);
+  }
+
+  async function load(){
+    try{
+      if(!contract){ await connect(); if(!contract) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false); }
+      const count = (await contract.getWithdrawRequestCount()).toNumber();
+      const tbody = $('rows');
+      tbody.innerHTML = "";
+
+      for(let i=0;i<count;i++){
+        const r = await contract.getRequest(i);
+        const requester = r[0];
+        const amountEth = ethers.utils.formatEther(r[1]);
+        const purpose = r[2];
+        const approvals = r[3].toNumber();
+        const withdrawn = r[4];
+
+        const approvedByMe = await contract.isApprovedBy(i, myAddr);
+
+        const status = withdrawn ? "✅ Withdrawn" : (approvals >= REQUIRED ? "🟢 Ready" : "🟡 Pending");
+        const canApprove = !withdrawn && !approvedByMe;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${i}</td>
+          <td class="muted">${requester.slice(0,6)}...${requester.slice(-4)}</td>
+          <td><b>${amountEth}</b> <span class="pill">Sepolia ETH</span></td>
+          <td>${escapeHtml(purpose)}</td>
+          <td><span class="pill">${approvals}/${REQUIRED}</span></td>
+          <td>${status}</td>
+          <td>
+            <button class="btn ${canApprove?'':'secondary'}" ${canApprove ? "" : "disabled"} onclick="approve(${i})">
+              ${approvedByMe ? "Approved" : "Approve"}
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      await refreshBalance();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function approve(i){
+    try{
+      const tx = await contract.approveWithdraw(i);
+      msg("ส่งอนุมัติแล้ว รอยืนยัน… ⛓️", true);
+      await tx.wait();
+      msg("อนุมัติสำเร็จ ✅", true);
+      await load();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  function escapeHtml(str){
+    return (str||"").replace(/[&<>"']/g, m => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
+  window.addEventListener("DOMContentLoaded", ()=>{ try{ connect(); }catch(e){} });
+
+  if(window.ethereum){
+    window.ethereum.on("accountsChanged", ()=>location.href="./index.html");
+    window.ethereum.on("chainChanged", ()=>location.reload());
+  }
+</script>
+</body>
+</html>

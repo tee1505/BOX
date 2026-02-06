@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="./config.js"></script>
+
+  <style>
+    :root{
+      --bg:#070707;
+      --bg2:#0c0c0c;
+      --card: rgba(255,255,255,.04);
+      --stroke: rgba(212,175,55,.22);
+      --stroke2: rgba(255,255,255,.10);
+      --gold:#d4af37;
+      --gold2:#f3d37a;
+      --text:#f6f1df;
+      --muted: rgba(246,241,223,.72);
+      --shadow: 0 10px 40px rgba(0,0,0,.45);
+      --radius: 18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans Thai", sans-serif;
+      background:
+        radial-gradient(900px 600px at 20% 10%, rgba(212,175,55,.12), transparent 55%),
+        radial-gradient(700px 500px at 80% 30%, rgba(243,211,122,.10), transparent 55%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      color:var(--text);
+    }
+    .wrap{min-height:100vh;display:grid;place-items:center;padding:26px}
+    .card{
+      width:100%;max-width:620px;
+      background: var(--card);
+      border:1px solid var(--stroke);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding:22px;
+      position:relative;
+      overflow:hidden;
+    }
+    .card:before{
+      content:"";
+      position:absolute; inset:-2px;
+      background: linear-gradient(135deg, rgba(212,175,55,.22), transparent 35%, rgba(212,175,55,.10));
+      pointer-events:none;
+      opacity:.55;
+    }
+    .content{position:relative}
+    h1{margin:0 0 6px;font-size:22px;letter-spacing:.2px}
+    .sub{margin:0;color:var(--muted)}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;align-items:center}
+    .pill{
+      display:inline-flex;gap:8px;align-items:center;
+      padding:8px 12px;border-radius:999px;
+      border:1px solid var(--stroke2);
+      background: rgba(0,0,0,.35);
+      color:var(--muted);
+      font-size:13px;
+    }
+    .dot{
+      width:8px;height:8px;border-radius:99px;background: var(--gold);
+      box-shadow: 0 0 18px rgba(212,175,55,.35);
+    }
+    .btn{
+      padding:12px 14px;border-radius:14px;
+      border:1px solid rgba(212,175,55,.55);
+      background: linear-gradient(180deg, rgba(212,175,55,.22), rgba(212,175,55,.12));
+      color: var(--text);
+      font-weight:900;
+      cursor:pointer;
+      transition:.15s transform ease, .15s opacity ease;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn.secondary{
+      border:1px solid var(--stroke2);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      font-weight:800;
+    }
+    label{display:block;margin-top:14px;color:var(--muted);font-weight:700;font-size:13px}
+    select{
+      width:100%;
+      margin-top:8px;
+      padding:12px;
+      border-radius:14px;
+      border:1px solid var(--stroke2);
+      background: rgba(0,0,0,.35);
+      color: var(--text);
+      outline:none;
+    }
+    #msg{margin-top:12px;color:var(--muted)}
+    .footer{
+      margin-top:14px;
+      display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+      color:rgba(246,241,223,.55);
+      font-size:12px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="content">
+        <h1>🔐 Login</h1>
+        <p class="sub">กด <b>Login</b> เพื่อเชื่อม MetaMask → ระบบตรวจ role → เด้งไปหน้าที่ถูกเอง</p>
+
+        <div class="row">
+          <div class="pill" id="net"><span class="dot"></span>Network: -</div>
+          <div class="pill" id="addr"><span class="dot"></span>Wallet: -</div>
+          <div class="pill" id="role"><span class="dot"></span>Role: -</div>
+        </div>
+
+        <div class="row">
+          <button class="btn" onclick="connect()">Login</button>
+          <button class="btn secondary" onclick="switchInMetaMask()">Switch Account</button>
+        </div>
+
+        <label>Accounts (ที่ MetaMask เปิดให้เว็บเห็น)</label>
+        <select id="acctSelect" onchange="onPick()">
+          <option value="">Select account</option>
+        </select>
+
+        <div id="msg"></div>
+
+        <div class="footer">
+          <div>Theme: Black/Gold • Network: Sepolia</div>
+          <div>Tip: ถ้าสลับบัญชี ให้สลับใน MetaMask แล้วค่อยกด Login</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id)=>document.getElementById(id);
+  let provider, signer, currentAddr;
+  let contractAddr;
+
+  async function connect(){
+    try{
+      if(!window.ethereum) return setMsg($('msg'), "ต้องมี MetaMask ก่อนนะ", false);
+
+      contractAddr = assertContractAddress(ethers);
+      provider = new ethers.providers.Web3Provider(window.ethereum);
+
+      // ขอสิทธิ์เฉพาะตอนกดปุ่ม
+      await provider.send("eth_requestAccounts", []);
+      signer = provider.getSigner();
+
+      await assertIsContract(provider, contractAddr);
+      await refreshStatusAndList();
+
+      setMsg($('msg'), "เชื่อมต่อแล้ว ✅ กำลังพาไปหน้าที่ถูก…", true);
+      await saveSessionAndRedirect();
+    }catch(e){
+      setMsg($('msg'), e?.data?.message || e.message, false);
+    }
+  }
+
+  async function refreshStatusAndList(){
+    currentAddr = await signer.getAddress();
+    const net = await provider.getNetwork();
+    if(net.chainId !== 11155111){
+      throw new Error("กรุณาเปลี่ยน Network เป็น Sepolia Testnet (chainId: 11155111)");
+    }
+
+    const role = detectRole(currentAddr);
+    $('addr').textContent = "Wallet: " + short(currentAddr);
+    $('net').textContent  = "Network: Sepolia ("+net.chainId+")";
+    $('role').textContent = "Role: " + role;
+
+    const accounts = await provider.listAccounts();
+    const sel = $('acctSelect');
+    sel.innerHTML = `<option value="">Select account</option>`;
+    accounts.forEach(a=>{
+      const opt = document.createElement("option");
+      opt.value = a;
+      opt.textContent = `${short(a)} — ${detectRole(a)}`;
+      if(a.toLowerCase() === currentAddr.toLowerCase()) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  function onPick(){
+    const pick = $('acctSelect').value;
+    if(!pick) return;
+    setMsg($('msg'), `เลือก ${short(pick)} แล้วนะ → ต้องสลับใน MetaMask ก่อน แล้วค่อยกด Login`, true);
+  }
+
+  async function saveSessionAndRedirect(){
+    const role = detectRole(currentAddr);
+    localStorage.setItem("logged_in", "1");
+    localStorage.setItem("wallet", currentAddr);
+    localStorage.setItem("role", role);
+    redirectByRole(role);
+  }
+
+  function switchInMetaMask(){
+    alert("MetaMask → เลือกบัญชี → กลับมาแล้วกด Login");
+  }
+
+  // เปิดหน้า: ไม่ล็อกอิน ไม่โชว์ข้อความ (แต่ถ้าเคย connect แล้ว จะเติม list ให้)
+  window.addEventListener("DOMContentLoaded", async ()=>{
+    try{
+      if(!window.ethereum) return;
+
+      contractAddr = assertContractAddress(ethers);
+      provider = new ethers.providers.Web3Provider(window.ethereum);
+      const accs = await provider.send("eth_accounts", []);
+      if(!accs || !accs.length) return;
+
+      signer = provider.getSigner();
+      await assertIsContract(provider, contractAddr);
+      await refreshStatusAndList();
+    }catch{}
+  });
+
+  if(window.ethereum){
+    window.ethereum.on("accountsChanged", ()=>location.reload());
+    window.ethereum.on("chainChanged", ()=>location.reload());
+  }
+</script>
+</body>
+</html>

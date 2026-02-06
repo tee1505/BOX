@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Withdrawer — Workspace</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="./config.js"></script>
+
+  <style>
+    :root{
+      --bg:#070707; --bg2:#0c0c0c;
+      --card: rgba(255,255,255,.04);
+      --stroke: rgba(212,175,55,.22);
+      --stroke2: rgba(255,255,255,.10);
+      --gold:#d4af37; --text:#f6f1df;
+      --muted: rgba(246,241,223,.72);
+      --shadow: 0 10px 40px rgba(0,0,0,.45);
+      --radius: 18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans Thai", sans-serif;
+      background:
+        radial-gradient(900px 600px at 20% 10%, rgba(212,175,55,.12), transparent 55%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      color:var(--text);
+    }
+    .wrap{max-width:1180px;margin:0 auto;padding:24px}
+    .hero{
+      border:1px solid var(--stroke);
+      border-radius: var(--radius);
+      padding:16px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .muted{color:var(--muted)}
+    .pill{
+      display:inline-flex;gap:8px;align-items:center;
+      padding:8px 12px;border-radius:999px;
+      border:1px solid var(--stroke2);
+      background: rgba(0,0,0,.35);
+      color:var(--muted);
+      font-size:12px;
+    }
+    .dot{width:8px;height:8px;border-radius:999px;background:var(--gold);box-shadow:0 0 18px rgba(212,175,55,.35)}
+    .btn{
+      padding:10px 12px;border-radius:14px;
+      border:1px solid rgba(212,175,55,.55);
+      background: linear-gradient(180deg, rgba(212,175,55,.22), rgba(212,175,55,.12));
+      color: var(--text);
+      cursor:pointer;font-weight:900;
+      transition:.15s transform ease;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn.secondary{
+      border:1px solid var(--stroke2);
+      background: rgba(255,255,255,.06);
+      font-weight:800;
+    }
+    .btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+    .card{
+      border:1px solid var(--stroke);
+      border-radius: var(--radius);
+      padding:14px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    input,textarea{
+      width:100%;
+      padding:12px;
+      border-radius:14px;
+      border:1px solid var(--stroke2);
+      background: rgba(0,0,0,.35);
+      color: var(--text);
+      outline:none;
+    }
+    textarea{min-height:110px;resize:vertical}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:12px 10px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left}
+    th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:rgba(246,241,223,.55)}
+    tr:hover td{background: rgba(212,175,55,.06)}
+    .mono{font-family: ui-monospace, Menlo, Consolas, monospace}
+    .trail{max-height:360px;overflow:auto}
+    @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h2 style="margin:0">🏦 Withdrawer Workspace</h2>
+        <div class="muted">Role: <b id="role"></b> | Wallet: <b id="wallet"></b></div>
+      </div>
+      <div class="row">
+        <span class="pill" id="net"><span class="dot"></span>Network: -</span>
+        <span class="pill" id="addr"><span class="dot"></span>Wallet: -</span>
+        <button class="btn secondary" onclick="logout()">Logout</button>
+        <button class="btn" onclick="loadAll()">Refresh</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <span class="pill">Contract Balance: <b id="bal">-</b> Sepolia ETH</span>
+      <span class="pill">Total Donated: <b id="totalDonated">-</b> ETH</span>
+      <span class="pill">Total Withdrawn: <b id="totalWithdrawn">-</b> ETH</span>
+      <span class="pill">Required Approvals: <b id="req">-</b></span>
+    </div>
+
+    <div id="msg" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin-top:0">📝 ขอเบิก (ง่ายสุด)</h3>
+      <label class="muted">Amount (Sepolia ETH)</label>
+      <input id="amt" placeholder="เช่น 0.05" />
+      <div style="height:10px"></div>
+      <label class="muted">คำร้องขอเบิก (Purpose)</label>
+      <textarea id="purpose" rows="4" placeholder="ขอเบิกไปทำอะไร (เขียนให้ชัด)"></textarea>
+      <div style="height:10px"></div>
+      <button class="btn" onclick="createReq()">ส่งคำขอเบิก</button>
+      <div class="muted" style="margin-top:10px">
+        ทริค: ส่งคำขอแล้ว → รอ Approver อนุมัติครบ → กด Withdraw จากตารางด้านล่างได้เลย
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">🧾 Financial Trail (เส้นทางการเงิน)</h3>
+      <div class="muted">ดึงจาก Event บนเชน: Donated / Requested / Approved / Executed</div>
+      <div style="height:10px"></div>
+      <div class="trail">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Type</th><th>Detail</th></tr>
+          </thead>
+          <tbody id="trailRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:14px;overflow:auto">
+    <h3 style="margin-top:0">📦 คำขอทั้งหมด</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Requester</th><th>Amount</th><th>Approvals</th><th>Status</th><th>Purpose</th><th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  guard("Withdrawer");
+  const $ = (id)=>document.getElementById(id);
+
+  let provider, signer, contract, myAddr, contractAddr;
+  let REQUIRED = 0;
+
+  $('role').textContent = localStorage.getItem("role");
+  $('wallet').textContent = short(localStorage.getItem("wallet"));
+
+  function logout(){ localStorage.clear(); location.href="./index.html"; }
+  function msg(t, ok=true){ setMsg($('msg'), t, ok); }
+
+  async function connect(){
+    try{
+      if(!window.ethereum) return msg("ต้องมี MetaMask ก่อนนะ", false);
+
+      contractAddr = assertContractAddress(ethers);
+      provider = new ethers.providers.Web3Provider(window.ethereum);
+      const accs = await provider.send("eth_accounts", []);
+      if(!accs || !accs.length){
+        await provider.send("eth_requestAccounts", []);
+      }
+      await assertIsContract(provider, contractAddr);
+
+      signer = provider.getSigner();
+      contract = new ethers.Contract(contractAddr, ABI, signer);
+
+      REQUIRED = (await contract.REQUIRED_APPROVALS()).toNumber();
+      $('req').textContent = REQUIRED;
+
+      myAddr = await signer.getAddress();
+      const net = await provider.getNetwork();
+      if(net.chainId !== 11155111){
+        throw new Error("กรุณาเปลี่ยน Network เป็น Sepolia Testnet (chainId: 11155111)");
+      }
+
+      const role = detectRole(myAddr);
+      localStorage.setItem("logged_in","1");
+      localStorage.setItem("wallet", myAddr);
+      localStorage.setItem("role", role);
+      if(role !== "Withdrawer") return location.href="./index.html";
+
+      $('addr').textContent = "Wallet: " + short(myAddr);
+      $('net').textContent  = "Network: Sepolia ("+net.chainId+")";
+
+      msg("เชื่อมต่อแล้ว ✅", true);
+      await loadAll();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function refreshBalance(){
+    const balWei = await provider.getBalance(contractAddr);
+    $('bal').textContent = ethers.utils.formatEther(balWei);
+  }
+
+  async function loadAll(){
+    if(!contract){ await connect(); if(!contract) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false); }
+    await Promise.all([loadRequests(), loadTotalsAndTrail()]);
+    await refreshBalance();
+  }
+
+  async function loadRequests(){
+    try{
+      const count = (await contract.getWithdrawRequestCount()).toNumber();
+      const tbody = $('rows');
+      tbody.innerHTML = "";
+
+      for(let i=0;i<count;i++){
+        const r = await contract.getRequest(i);
+        const requester = r[0];
+        const amountEth = ethers.utils.formatEther(r[1]);
+        const purpose = r[2];
+        const approvals = r[3].toNumber();
+        const withdrawn = r[4];
+
+        const ready = !withdrawn && approvals >= REQUIRED;
+        const status = withdrawn ? "✅ Withdrawn" : (ready ? "🟢 Ready" : "🟡 Pending");
+
+        const actionBtn = ready
+          ? `<button class="btn" onclick="doWithdraw(${i})">Withdraw</button>`
+          : `<button class="btn secondary" disabled>Withdraw</button>`;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${i}</td>
+          <td class="muted mono">${requester.slice(0,6)}...${requester.slice(-4)}</td>
+          <td><b>${amountEth}</b> ETH</td>
+          <td><span class="pill">${approvals}/${REQUIRED}</span></td>
+          <td>${status}</td>
+          <td>${escapeHtml(purpose)}</td>
+          <td>${actionBtn}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function createReq(){
+    try{
+      if(!contract){ await connect(); if(!contract) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false); }
+
+      const amt = $('amt').value.trim();
+      const purpose = $('purpose').value.trim();
+      if(!amt || !purpose) return msg("ใส่จำนวนเงิน + คำร้องขอเบิก ให้ครบ", false);
+
+      const tx = await contract.requestWithdraw(ethers.utils.parseEther(amt), purpose);
+      msg("ส่งคำขอแล้ว รอยืนยัน… ⛓️", true);
+      await tx.wait();
+
+      msg("ส่งคำขอสำเร็จ ✅", true);
+      $('amt').value = "";
+      $('purpose').value = "";
+      await loadAll();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function doWithdraw(index){
+    try{
+      if(!contract){ await connect(); if(!contract) return msg("ยังไม่ได้เชื่อมต่อ MetaMask", false); }
+
+      const tx = await contract.withdraw(Number(index));
+      msg(`กำลังเบิกคำขอ #${index} รอยืนยัน… ⛓️`, true);
+      await tx.wait();
+
+      msg(`เบิกสำเร็จ 🎉 (คำขอ #${index})`, true);
+      await loadAll();
+    }catch(e){
+      msg(e?.data?.message || e.message, false);
+    }
+  }
+
+  async function loadTotalsAndTrail(){
+    try{
+      const fromBlock = 0;
+
+      const [donated, requested, approved, executed] = await Promise.all([
+        contract.queryFilter(contract.filters.Donated(), fromBlock, "latest"),
+        contract.queryFilter(contract.filters.WithdrawRequested(), fromBlock, "latest"),
+        contract.queryFilter(contract.filters.WithdrawApproved(), fromBlock, "latest"),
+        contract.queryFilter(contract.filters.WithdrawExecuted(), fromBlock, "latest"),
+      ]);
+
+      let totalDonatedWei = ethers.BigNumber.from(0);
+      for(const ev of donated){ totalDonatedWei = totalDonatedWei.add(ev.args.amount); }
+
+      let totalWithdrawnWei = ethers.BigNumber.from(0);
+      for(const ev of executed){ totalWithdrawnWei = totalWithdrawnWei.add(ev.args.amount); }
+
+      $('totalDonated').textContent = ethers.utils.formatEther(totalDonatedWei);
+      $('totalWithdrawn').textContent = ethers.utils.formatEther(totalWithdrawnWei);
+
+      const all = [];
+      for(const ev of donated)  all.push({ type:"Donated", ev });
+      for(const ev of requested)all.push({ type:"WithdrawRequested", ev });
+      for(const ev of approved) all.push({ type:"WithdrawApproved", ev });
+      for(const ev of executed) all.push({ type:"WithdrawExecuted", ev });
+
+      all.sort((a,b)=>{
+        if(a.ev.blockNumber !== b.ev.blockNumber) return a.ev.blockNumber - b.ev.blockNumber;
+        if(a.ev.transactionIndex !== b.ev.transactionIndex) return a.ev.transactionIndex - b.ev.transactionIndex;
+        return (a.ev.logIndex ?? 0) - (b.ev.logIndex ?? 0);
+      });
+
+      const blockNums = [...new Set(all.map(x=>x.ev.blockNumber))];
+      const blockMap = new Map();
+      for(const bn of blockNums){
+        const blk = await provider.getBlock(bn);
+        blockMap.set(bn, blk?.timestamp ? Number(blk.timestamp) : null);
+      }
+
+      const tbody = $('trailRows');
+      tbody.innerHTML = "";
+
+      const show = all.slice().reverse().slice(0, 80);
+      for(const item of show){
+        const ts = blockMap.get(item.ev.blockNumber);
+        const timeStr = ts ? new Date(ts*1000).toLocaleString() : "-";
+        const detail = buildTrailDetail(item.type, item.ev);
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="muted">${escapeHtml(timeStr)}</td>
+          <td class="mono"><b>${escapeHtml(item.type)}</b></td>
+          <td class="muted">${detail}</td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }catch(e){
+      const tbody = $('trailRows');
+      if(tbody) tbody.innerHTML = `<tr><td colspan="3" class="muted">โหลด Trail ไม่สำเร็จ: ${escapeHtml(e?.message || "unknown")}</td></tr>`;
+    }
+  }
+
+  function buildTrailDetail(type, ev){
+    try{
+      if(type === "Donated"){
+        const from = ev.args.from;
+        const amt = ethers.utils.formatEther(ev.args.amount);
+        return `from ${short(from)} • amount ${amt} ETH`;
+      }
+      if(type === "WithdrawRequested"){
+        const idx = ev.args.index?.toString?.() ?? "-";
+        const requester = ev.args.requester;
+        const amt = ethers.utils.formatEther(ev.args.amount);
+        const purpose = ev.args.purpose || "";
+        return `#${idx} requester ${short(requester)} • amount ${amt} ETH • "${escapeHtml(purpose)}"`;
+      }
+      if(type === "WithdrawApproved"){
+        const idx = ev.args.index?.toString?.() ?? "-";
+        const approver = ev.args.approver;
+        const approvals = ev.args.approvals?.toString?.() ?? "-";
+        return `#${idx} by ${short(approver)} • approvals=${approvals}`;
+      }
+      if(type === "WithdrawExecuted"){
+        const idx = ev.args.index?.toString?.() ?? "-";
+        const to = ev.args.to;
+        const amt = ethers.utils.formatEther(ev.args.amount);
+        const purpose = ev.args.purpose || "";
+        return `#${idx} to ${short(to)} • amount ${amt} ETH • "${escapeHtml(purpose)}"`;
+      }
+      return "-";
+    } catch {
+      return "-";
+    }
+  }
+
+  function escapeHtml(str){
+    return (str||"").toString().replace(/[&<>"']/g, m => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
+  window.addEventListener("DOMContentLoaded", ()=>{ try{ connect(); }catch(e){} });
+
+  if(window.ethereum){
+    window.ethereum.on("accountsChanged", ()=>location.href="./index.html");
+    window.ethereum.on("chainChanged", ()=>location.reload());
+  }
+</script>
+</body>
+</html>
